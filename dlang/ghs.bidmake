@@ -1,0 +1,17 @@
+import git;
+import dlang;
+
+let mored git.repo
+{
+    url "https://github.com/marler8997/mored";
+}
+
+dlang.compile "ghs"
+{
+    targetType exe;
+    //outputDirectory ??;
+    objectDirectory "obj";
+    includePath mored.dir;
+    includeImports true;
+    source "ghs.d";
+}

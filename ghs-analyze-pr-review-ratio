@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+import sys
+import os
+import argparse
+
+import ghslib
+
+parser = argparse.ArgumentParser()
+parser.add_argument("repo")
+parser.add_argument("--no-cache", action="store_true")
+parser.add_argument("--server", default=ghslib.github_graphql_server)
+parser.add_argument("--csv", action="store_true")
+args = parser.parse_args()
+
+(owner, repo) = ghslib.parse_repo(args.repo)
+
+response = ghslib.get_graphql("""query {
+  repository(owner:"%s", name:"%s") {
+  pullRequests(%%s) { edges { cursor node {
+    number
+    title
+    author{login}
+    state
+    mergedBy{login}
+    reviews(last:100) { edges { cursor node {
+      author{login}
+    }}}
+    }}}
+  }
+}
+""" % (owner, repo), paginate = {"node":"repository.pullRequests"},
+    no_cache = args.no_cache, server = args.server)
+
+pullRequests = response["repository"]["pullRequests"]["edges"]
+
+actors = {}
+max_login = 0
+
+def get_actor(login):
+    global actors
+    global max_login
+    if login in actors:
+        return actors[login]
+    if len(login) > max_login:
+        max_login = len(login)
+    actors[login] = {
+        "reviewCount" : 0,
+        "pullRequestCount_OPEN" : 0,
+        "pullRequestCount_MERGED" : 0,
+        "pullRequestCount_CLOSED" : 0
+    }
+    return actors[login]
+
+for prNode in pullRequests:
+    pr = prNode["node"]
+    #print(pr)
+    author_node = pr["author"]
+    if not author_node:
+        author_login = "<unknown>"
+    else:
+        author_login = author_node["login"]
+    actor = get_actor(author_login)
+
+    state = pr["state"]
+    actors[author_login]["pullRequestCount_" + state] += 1
+
+    for reviewNode in pr["reviews"]["edges"]:
+        review = reviewNode["node"]
+        review_actor = get_actor(review["author"]["login"])
+        review_actor["reviewCount"] += 1
+
+def align(val, max):
+    return val + (" " * (max + 1 - len(val)))
+
+if args.csv:
+    print("user,review/pr,reviews,open prs,merged prs,closed prs")
+else:
+    print("-------------------------------------------------------------")
+for login, actor in actors.items():
+    reviews = actor["reviewCount"]
+    open = actor["pullRequestCount_OPEN"]
+    merged = actor["pullRequestCount_MERGED"]
+    closed = actor["pullRequestCount_CLOSED"]
+    prTotal = open + merged + closed
+    if prTotal == 0:
+        ratio = 0
+    else:
+        ratio = float(reviews) / float(prTotal)
+    if args.csv:
+        print(login + "," + str(ratio) + "," + str(reviews) + "," + str(open) +
+              "," + str(merged) + "," + str(closed))
+    else:
+        print(align(login, max_login) +
+              align("| " + str(ratio) + " review/pr ", 15) +
+              "| " + str(reviews) + " reviews " +
+              "| " + str(prTotal) + " pull request(s) (" + str(open) + " open, " +
+              str(merged) + " merged, " + str(closed) + " closed)")
+
