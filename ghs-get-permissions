@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+import sys
+import os
+import argparse
+
+import ghslib
+
+parser = argparse.ArgumentParser()
+parser.add_argument("owner")
+parser.add_argument("--no-cache", action="store_true")
+parser.add_argument("--server", default=ghslib.github_graphql_server)
+#parser.add_argument("--csv", action="store_true")
+args = parser.parse_args()
+
+
+response = ghslib.get_graphql("""query {
+  repositoryOwner(login:"%s") {
+  repositories(%%s) { edges { cursor node {
+    name
+    collaborators(last:100) { edges { node {
+      name
+    }}}
+    branchProtectionRules(last:100) { edges { node {
+      pattern
+      requiredApprovingReviewCount 
+      requiredStatusCheckContexts 
+      requiresApprovingReviews 
+      requiresCommitSignatures 
+      requiresStatusChecks 
+      requiresStrictStatusChecks 
+      restrictsPushes 
+      restrictsReviewDismissals 
+    }}}
+  }}}
+  }
+}
+""" % (args.owner), paginate = {"node":"repositoryOwner.repositories"},
+    no_cache = args.no_cache, server = args.server)
+
+repos = response["repositoryOwner"]["repositories"]["edges"]
+for repoNode in repos:
+    repo = repoNode["node"]
+    repo_name = repo["name"]
+    print("Repo: '%s'" % repo_name)
+    for collaboratorNode in repo["collaborators"]["edges"]:
+        collaborator = collaboratorNode["node"]
+        print("  Collaborator: %s" % collaborator)
+    for protectionNode in repo["branchProtectionRules"]["edges"]:
+        protection = protectionNode["node"]
+        print("  BranchProtection: %s" % protection)
