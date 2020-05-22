@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+import sys
+import os
+import argparse
+import json
+
+import ghslib
+
+def get_label_time(timeline, name):
+    #print(timeline)
+    for node in timeline["nodes"]:
+        typename = node["__typename"]
+        if typename == "LabeledEvent":
+            label = node["label"]
+            if label["name"] == name:
+                return node["createdAt"]
+    print("ERROR: label '{}' is not in timeline: {}".format(name, timeline))
+    assert(0)
+
+def make_review(node):
+    return {
+        'state': node["state"],
+        'time': node["createdAt"],
+        'author_login': node["author"]["login"],
+        'authorAssociation': node["authorAssociation"],
+        'commit': node["commit"]["oid"],
+    }
+
+def get_pull_requests(owner, repo, no_cache, server):
+
+# approval datetime?
+# author email?
+# approval timestamp
+#
+# done: mergeable state
+# done: label list
+# done: sha? potentialMergeCommit?
+# done: labels and their timestamps
+#
+    # TODO: need to paginate timeline items as well?
+    response = ghslib.get_graphql("""query {
+      repository(owner:"%s", name:"%s") {
+        pullRequests(%%s, states: OPEN) { edges { cursor node {
+          number
+          author{login}
+          mergeable
+          potentialMergeCommit { id oid }
+          labels (last:100) { edges { node { name updatedAt } } }
+          timelineItems(last:100, itemTypes: [LABELED_EVENT, PULL_REQUEST_REVIEW]) {
+            nodes {
+              __typename
+              ... on LabeledEvent {
+                createdAt
+                label { name }
+              }
+              ... on PullRequestReview {
+                createdAt
+                author{login}
+                authorAssociation
+                commit { oid }
+                state
+              }
+            }
+          }
+        }}}
+      }
+    }
+    """ % (owner, repo), paginate = {"node":"repository.pullRequests"},
+        no_cache = no_cache, server = server)
+
+    pullRequests = response["repository"]["pullRequests"]["edges"]
+
+    max_author = 0
+    for prNode in pullRequests:
+        pr = prNode["node"]
+        max_author = max(max_author, len(pr["author"]["login"]))
+
+    pull_request_results = []
+    for prNode in pullRequests:
+        pr = prNode["node"]
+        #print(pr)
+        potentialMergeCommit = pr["potentialMergeCommit"]
+        if potentialMergeCommit:
+            oid = potentialMergeCommit["oid"]
+        else:
+            oid = ""
+
+        # NOTE: this code assumes that timeline is ordered by time
+        timeline = pr["timelineItems"]
+        reviews = {}
+        for node in timeline["nodes"]:
+            typename = node["__typename"]
+            if typename == "PullRequestReview":
+                state = node["state"]
+                if state == "APPROVED" or state == "CHANGES_REQUESTED" or state == "DISMISSED":
+                    reviews[node["author"]["login"]] = make_review(node)
+
+        labels = []
+        for label_edge in pr["labels"]["edges"]:
+            name = label_edge["node"]["name"]
+            labels.append({'name':name, 'time':get_label_time(timeline, name)})
+
+        pull_request_results.append({
+            'number':pr["number"],
+            'author_login':pr["author"]["login"],
+            "mergeable":pr["mergeable"],
+            "potentialMergeCommit":oid,
+            'labels':labels,
+            'reviews':reviews,
+        })
+
+    return pull_request_results
+
+
+def main():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("repo")
+    parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--server", default=ghslib.github_graphql_server)
+    parser.add_argument("--csv", action="store_true")
+    args = parser.parse_args()
+
+    (owner, repo) = ghslib.parse_repo(args.repo)
+    pull_requests = get_pull_requests(owner, repo, args.no_cache, args.server)
+    print(json.dumps(pull_requests))
+
+main()
