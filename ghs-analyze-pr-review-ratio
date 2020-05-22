@@ -34,21 +34,17 @@ response = ghslib.get_graphql("""query {
 pullRequests = response["repository"]["pullRequests"]["edges"]
 
 actors = {}
-max_login = 0
+
+class Actor:
+    def __init__(self, login):
+        self.login = login
+        self.review_count = 0
+        self.pr = {'OPEN':0,'MERGED':0,'CLOSED':0}
 
 def get_actor(login):
     global actors
-    global max_login
-    if login in actors:
-        return actors[login]
-    if len(login) > max_login:
-        max_login = len(login)
-    actors[login] = {
-        "reviewCount" : 0,
-        "pullRequestCount_OPEN" : 0,
-        "pullRequestCount_MERGED" : 0,
-        "pullRequestCount_CLOSED" : 0
-    }
+    if not (login in actors):
+        actors[login] = Actor(login)
     return actors[login]
 
 for prNode in pullRequests:
@@ -62,37 +58,62 @@ for prNode in pullRequests:
     actor = get_actor(author_login)
 
     state = pr["state"]
-    actors[author_login]["pullRequestCount_" + state] += 1
+    actors[author_login].pr[state] += 1
 
     for reviewNode in pr["reviews"]["edges"]:
         review = reviewNode["node"]
-        review_actor = get_actor(review["author"]["login"])
-        review_actor["reviewCount"] += 1
+        author = review["author"]
+        if not author:
+            review_actor = get_actor("???no_author???")
+        else:
+            review_actor = get_actor(author["login"])
+        review_actor.review_count += 1
 
 def align(val, max):
-    return val + (" " * (max + 1 - len(val)))
+    return val + (" " * (max - len(val)))
+
+class Maxes:
+    def __init__(self):
+        self.login = 0
+        self.review_count = 0
+        self.pr_total = 0
+
+maxes = Maxes()
+
+for login, actor in actors.items():
+    open = actor.pr["OPEN"]
+    merged = actor.pr["MERGED"]
+    closed = actor.pr["CLOSED"]
+    pr_total = open + merged + closed
+    actor.pr["total"] = pr_total
+    maxes.login = max(maxes.login, len(actor.login))
+    maxes.review_count = max(maxes.review_count, actor.review_count)
+    maxes.pr_total = max(maxes.pr_total, pr_total)
 
 if args.csv:
     print("user,review/pr,reviews,open prs,merged prs,closed prs")
 else:
     print("-------------------------------------------------------------")
+
+align_review_count = len(str(maxes.review_count))
+align_pr_total = len(str(maxes.pr_total))
+
 for login, actor in actors.items():
-    reviews = actor["reviewCount"]
-    open = actor["pullRequestCount_OPEN"]
-    merged = actor["pullRequestCount_MERGED"]
-    closed = actor["pullRequestCount_CLOSED"]
-    prTotal = open + merged + closed
-    if prTotal == 0:
+    open = actor.pr["OPEN"]
+    merged = actor.pr["MERGED"]
+    closed = actor.pr["CLOSED"]
+    pr_total = actor.pr["total"]
+    if pr_total == 0:
         ratio = 0
     else:
-        ratio = float(reviews) / float(prTotal)
+        ratio = float(actor.review_count) / float(pr_total)
     if args.csv:
-        print(login + "," + str(ratio) + "," + str(reviews) + "," + str(open) +
+        print(login + "," + str(ratio) + "," + str(actor.review_count) + "," + str(open) +
               "," + str(merged) + "," + str(closed))
     else:
-        print(align(login, max_login) +
-              align("| " + str(ratio) + " review/pr ", 15) +
-              "| " + str(reviews) + " reviews " +
-              "| " + str(prTotal) + " pull request(s) (" + str(open) + " open, " +
-              str(merged) + " merged, " + str(closed) + " closed)")
+        print(align(login, maxes.login)
+              + " | " + align(str(actor.review_count), align_review_count) + " reviews"
+              + " | {:.1f} review/pr".format(ratio)
+              + " | " + align(str(pr_total), align_pr_total)  + " pull request(s) (" + str(open) + " open, "
+              + str(merged) + " merged, " + str(closed) + " closed)")
 
